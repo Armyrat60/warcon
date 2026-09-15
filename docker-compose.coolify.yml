@@ -12,17 +12,12 @@
 
 services:
   warcon:
-    # Pinned image built by this fork's own release workflow (.github/workflows/release.yml),
-    # which publishes on any `v*` tag. Nothing here ever changes on its own: a redeploy, a
-    # restart, or a host reboot pulls these exact bytes. Updating is a deliberate act -- tag a
-    # new version, then change WARCON_VERSION in Coolify and redeploy.
-    #
-    # Pin the full version (0.2.0), never `latest`, or the guarantee above is gone.
-    image: ghcr.io/armyrat60/warcon:${WARCON_VERSION}
-    # To test a local patch without cutting a release, comment out `image:` and uncomment:
-    # build:
-    #   context: .
-    #   dockerfile: Dockerfile
+    # Coolify builds this from the repo it cloned. Nothing updates on its own: upstream cannot
+    # push to this fork, so `main` only moves when you press "Sync fork" on GitHub. Redeploy as
+    # often as you like -- same code every time, until you deliberately sync.
+    build:
+      context: .
+      dockerfile: Dockerfile
     restart: unless-stopped
 
     # Traefik reaches this on the internal network. Deliberately NOT `ports:`, which would
