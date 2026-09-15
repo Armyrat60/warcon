@@ -4,9 +4,15 @@ This fork exists to put updates under our control. It **adds** two files
 (`docker-compose.coolify.yml` and this one) and **modifies none**, so every upstream merge is a
 fast-forward and can never conflict.
 
-Deployment pulls a **pinned image** that this fork builds for itself, rather than building from
-source on the server. Nothing on the panel changes unless we tag a new version and deliberately
-point Coolify at it — a redeploy, a restart, or a host reboot all pull the same bytes.
+Deployment is **two containers** (`warcon` + `db`), matching the layout warcon.app documents, and
+pulls a **pinned image** this fork builds for itself rather than building from source on the
+server. Nothing on the panel changes unless we tag a new version and deliberately point Coolify
+at it — a redeploy, a restart, or a host reboot all pull the same bytes.
+
+`WARCON_ROLE=all` serves the panel, runs the observation worker in-process, and applies
+migrations on start. Upstream's own compose splits that into `migrate`/`web`/`worker` so a web
+deploy never interrupts observation, but Coolify redeploys the whole stack at once, so the split
+would buy nothing here while costing an extra secret and an internal relay port.
 
 ## One-time setup
 
@@ -75,8 +81,8 @@ Four paths can actually break a deploy:
 
 - **`.env.example`** — a newly required variable. `env.ts` refuses to start without `ORIGIN`,
   `BETTER_AUTH_SECRET`, or a database target, so add it in Coolify *before* redeploying.
-- **`drizzle/`** — new migrations. The `migrate` service applies them automatically, but they are
-  **one-way**. See rollback below.
+- **`drizzle/`** — new migrations. The container applies them on start, but they are **one-way**.
+  See rollback below.
 - **`docker-compose.yml`** — upstream changing the service layout (new service, renamed role,
   changed port) is the one case needing hand work, since `docker-compose.coolify.yml` is a
   parallel copy rather than an override. Port the change across.
@@ -101,7 +107,6 @@ Set in Coolify, not in the repository.
 | `ORIGIN` | The exact public URL, no trailing slash. Cookies are only marked Secure when it starts with `https://`. |
 | `BETTER_AUTH_SECRET` | `openssl rand -base64 32`. Changing it signs everyone out. |
 | `ENCRYPTION_KEY` | `openssl rand -base64 32`. **Changing or losing it makes every stored RCON password permanently undecryptable.** Back it up separately from the database. |
-| `RELAY_SECRET` | `openssl rand -base64 32`. Shared by the web and worker roles. |
 | `POSTGRES_PASSWORD` | Cannot be rotated by editing this alone — Postgres only reads it at initdb, so the existing volume keeps the old one. Change it inside Postgres first. |
 | `SETUP_TOKEN` | Required before the first deploy: `/setup` creates the site owner unauthenticated while the panel has zero users. |
 | `ADDRESS_HEADER` | `x-forwarded-for` behind Traefik alone, `cf-connecting-ip` behind a proxied Cloudflare record. Wrong value collapses every client onto one apparent IP, and the 40-failure per-IP lockout then locks out everyone at once. |
