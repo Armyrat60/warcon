@@ -13,9 +13,18 @@
 # internal compose network.
 
 x-warcon: &warcon
-  build:
-    context: .
-    dockerfile: Dockerfile
+  # Pinned image built by this fork's own release workflow (.github/workflows/release.yml),
+  # which publishes on any `v*` tag. Nothing here ever changes on its own: a redeploy, a
+  # restart, or a host reboot pulls these exact bytes. Updating is a deliberate act — tag a
+  # new version, then change WARCON_VERSION in Coolify and redeploy.
+  #
+  # Pin the full version (0.2.0), never `latest`, or the guarantee above is gone.
+  image: ghcr.io/armyrat60/warcon:${WARCON_VERSION}
+  # To test a local patch without cutting a release, comment out `image:` above, uncomment
+  # this, and set Coolify's Docker Compose Location back to a build-from-source deploy:
+  # build:
+  #   context: .
+  #   dockerfile: Dockerfile
   environment: &warcon-env
     # --- database (bundled TimescaleDB below) ---
     # Separate fields so the password never needs URL-encoding.

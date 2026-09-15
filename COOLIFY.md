@@ -1,10 +1,43 @@
 # Running this fork on Coolify
 
-This fork exists to make upstream updates deliberate, not to change Warcon. It **adds** two files
+This fork exists to put updates under our control. It **adds** two files
 (`docker-compose.coolify.yml` and this one) and **modifies none**, so every upstream merge is a
-fast-forward and never conflicts.
+fast-forward and can never conflict.
 
-Coolify resource settings:
+Deployment pulls a **pinned image** that this fork builds for itself, rather than building from
+source on the server. Nothing on the panel changes unless we tag a new version and deliberately
+point Coolify at it — a redeploy, a restart, or a host reboot all pull the same bytes.
+
+## One-time setup
+
+### 1. Enable Actions on the fork
+
+GitHub does not register a fork's workflows until you ask it to. Open the repository's **Actions**
+tab and click *"I understand my workflows, go ahead and enable them"*. Without this, tagging a
+release silently builds nothing.
+
+### 2. Cut the first release
+
+```sh
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+`release.yml` builds linux/amd64 + linux/arm64 and publishes:
+
+- `ghcr.io/armyrat60/warcon:0.2.0` ← pin this one
+- `ghcr.io/armyrat60/warcon:0.2`
+- `ghcr.io/armyrat60/warcon:latest` ← do not use
+
+Note the image tag drops the `v`: git tag `v0.2.0` produces image tag `0.2.0`.
+
+### 3. Make the package pullable
+
+After the first publish, open the package under the repository's **Packages** and either set its
+visibility to **Public**, or leave it private and add a GHCR registry credential in Coolify (a
+GitHub PAT with `read:packages`). Public is simpler; the image contains no secrets.
+
+### 4. Coolify resource
 
 | Setting | Value |
 | --- | --- |
@@ -14,18 +47,23 @@ Coolify resource settings:
 | Automatic Deployment | **off** |
 | Domain | on the `warcon` service only, port 3000 |
 
-Everything else lives in the Environment Variables tab (see the table below), never in a
-committed `.env`.
+Everything else lives in the Environment Variables tab (below), never in a committed `.env`.
 
-## Keeping up with upstream
+## Updating
 
-Because nothing upstream owns is modified here, GitHub's **Sync fork** button on the repository
-page does the whole merge — no local clone needed. It will always offer a fast-forward.
+Four steps, none of them automatic.
 
-Syncing the fork deploys nothing. Coolify only moves when you press Redeploy, so the safe order
-is: review → sync → redeploy.
+1. **Sync.** The fork modifies no upstream file, so GitHub's **Sync fork** button on the repository
+   page does the whole merge in one click. It will always offer a fast-forward. This deploys
+   nothing.
+2. **Review** what you just took (see below).
+3. **Tag.** `git tag v0.2.1 && git push origin v0.2.1`. Wait for the Actions run to go green.
+4. **Deploy.** Change `WARCON_VERSION` to `0.2.1` in Coolify and hit Redeploy.
 
-### Review first
+Step 4 is the only one that touches production, it is one environment variable, and it is
+reversible — which is the whole point of pinning.
+
+### What to review before tagging
 
 ```sh
 git fetch upstream
@@ -33,30 +71,25 @@ git log --oneline main..upstream/main
 git diff main..upstream/main -- .env.example drizzle/ docker-compose.yml Dockerfile
 ```
 
-Four paths are the ones that can actually break a deploy:
+Four paths can actually break a deploy:
 
 - **`.env.example`** — a newly required variable. `env.ts` refuses to start without `ORIGIN`,
   `BETTER_AUTH_SECRET`, or a database target, so add it in Coolify *before* redeploying.
-- **`drizzle/`** — new migrations. The `migrate` service applies them automatically on deploy, but
-  they are one-way: a rollback to an older image against a migrated database is not supported.
-  Take a database backup before a deploy that carries migrations.
+- **`drizzle/`** — new migrations. The `migrate` service applies them automatically, but they are
+  **one-way**. See rollback below.
 - **`docker-compose.yml`** — upstream changing the service layout (new service, renamed role,
-  changed port) is the one case where this fork needs hand-editing, since
-  `docker-compose.coolify.yml` is a parallel copy rather than an override. Port the change across.
+  changed port) is the one case needing hand work, since `docker-compose.coolify.yml` is a
+  parallel copy rather than an override. Port the change across.
 - **`Dockerfile`** — build or runtime changes.
 
-### Then
+### Rolling back
 
-```sh
-git merge --ff-only upstream/main
-git push
-```
+Set `WARCON_VERSION` to the previous version and redeploy. This is safe **only if that update
+carried no migration** — a newer schema against an older image is not supported. If `drizzle/`
+changed, roll back by restoring the database backup taken before the deploy, then changing the
+version.
 
-Then Redeploy in Coolify. `migrate` applies pending schema changes and exits before `warcon` and
-`worker` start; environment variables and the `warcon-db` volume are untouched by a redeploy.
-
-If `--ff-only` ever refuses, something in this fork has diverged — find it with
-`git diff --stat upstream/main` and move it back out of an upstream-owned file.
+So: **back up the database before any deploy whose diff touched `drizzle/`.**
 
 ## Environment variables
 
@@ -64,6 +97,7 @@ Set in Coolify, not in the repository.
 
 | Variable | Notes |
 | --- | --- |
+| `WARCON_VERSION` | The image tag to run, e.g. `0.2.0`. Never `latest`. This is the update switch. |
 | `ORIGIN` | The exact public URL, no trailing slash. Cookies are only marked Secure when it starts with `https://`. |
 | `BETTER_AUTH_SECRET` | `openssl rand -base64 32`. Changing it signs everyone out. |
 | `ENCRYPTION_KEY` | `openssl rand -base64 32`. **Changing or losing it makes every stored RCON password permanently undecryptable.** Back it up separately from the database. |
