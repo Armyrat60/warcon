@@ -1,0 +1,97 @@
+# Warcon on Coolify. See COOLIFY.md.
+#
+# This file sits ALONGSIDE upstream's docker-compose.yml and never replaces it, so this fork
+# modifies no upstream file and every `git merge upstream/main` stays a fast-forward. Point
+# Coolify at it: resource Settings -> "Docker Compose Location" = /docker-compose.coolify.yml.
+#
+# Two containers, matching the layout warcon.app documents: WARCON_ROLE=all serves the panel,
+# runs the observation worker in-process, and applies migrations on start. Upstream's own
+# compose splits that into migrate/web/worker so a web deploy never interrupts observation --
+# but Coolify redeploys the whole stack at once, so the split would buy nothing here while
+# costing an extra secret (RELAY_SECRET) and an internal relay port.
+
+services:
+  warcon:
+    # Coolify builds this from the repo it cloned. Nothing updates on its own: upstream cannot
+    # push to this fork, so `main` only moves when you press "Sync fork" on GitHub. Redeploy as
+    # often as you like -- same code every time, until you deliberately sync.
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+
+    # Traefik reaches this on the internal network. Deliberately NOT `ports:`, which would
+    # publish 3000 on the host and let anyone reach the panel over plain HTTP, bypassing TLS.
+    # Assign the domain to THIS service in the Coolify UI, port 3000.
+    expose:
+      - '3000'
+
+    environment:
+      # Serve + worker in-process + migrate on start.
+      WARCON_ROLE: all
+
+      # --- database (the bundled TimescaleDB below) ---
+      # Separate fields so the password never needs URL-encoding.
+      PGHOST: db
+      PGPORT: 5432
+      PGUSER: warcon
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: warcon
+
+      # --- required (Coolify env tab) ---
+      ORIGIN: ${ORIGIN}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+
+      # --- hardening (see COOLIFY.md) ---
+      # Closes the unauthenticated first-run owner setup. Set BEFORE the first deploy.
+      SETUP_TOKEN: ${SETUP_TOKEN}
+      # The built-in mock game server defaults to ON in code; off in production.
+      ALLOW_DEMO_SERVER: 'false'
+      # Nobody self-registers an organisation; you invite them.
+      ALLOW_ORG_SIGNUP: 'false'
+
+      # --- client IP behind Coolify's Traefik ---
+      # Wrong value = every user shares one apparent IP, and the 40-failure per-IP lockout
+      # then locks out your whole community at once. Pick ONE:
+      #   Traefik only (grey-cloud DNS):     x-forwarded-for   with XFF_DEPTH=1
+      #   Cloudflare proxied (orange-cloud): cf-connecting-ip  and leave XFF_DEPTH blank
+      ADDRESS_HEADER: ${ADDRESS_HEADER}
+      XFF_DEPTH: ${XFF_DEPTH}
+
+      # --- optional ---
+      APP_NAME: ${APP_NAME}
+      STEAM_API_KEY: ${STEAM_API_KEY}
+      DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID}
+      DISCORD_CLIENT_SECRET: ${DISCORD_CLIENT_SECRET}
+      TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY}
+      TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY}
+
+    depends_on:
+      db:
+        condition: service_healthy
+
+    # Uncomment if a WARDOGS RCON listener binds 127.0.0.1 on this same Docker host.
+    # Only the site owner may register a private/loopback target (hostpolicy.ts).
+    # extra_hosts:
+    #   - 'host.docker.internal:host-gateway'
+
+  db:
+    image: timescale/timescaledb:2.30.0-pg18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: warcon
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: warcon
+    volumes:
+      # Survives every redeploy. PostgreSQL 18+ images keep data in a versioned subdirectory.
+      # Deleting the Coolify resource deletes this. Nothing else does.
+      - warcon-db:/var/lib/postgresql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U warcon -d warcon']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  warcon-db:
