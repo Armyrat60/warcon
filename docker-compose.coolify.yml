@@ -87,6 +87,9 @@ services:
       # Survives every redeploy. PostgreSQL 18+ images keep data in a versioned subdirectory.
       # Deleting the Coolify resource deletes this. Nothing else does.
       - warcon-db:/var/lib/postgresql
+      # Where the scheduled pg_dump writes. Separate volume so a dump is never inside the
+      # data directory it is protecting. See COOLIFY.md -> Database backups.
+      - warcon-backups:/backups
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U warcon -d warcon']
       interval: 5s
@@ -95,3 +98,4 @@ services:
 
 volumes:
   warcon-db:
+  warcon-backups:
