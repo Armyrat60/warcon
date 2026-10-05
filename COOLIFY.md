@@ -88,8 +88,52 @@ Environment variables and the `warcon-db` volume are properties of the Coolify r
 deployment. Redeploy, restart and rebuild all preserve them. **Deleting the Coolify resource
 deletes the volume.**
 
-Enable Coolify's scheduled backups on the `db` service: the panel holds the entire ban history and
-audit trail, and there is no export-everything button.
+See [Database backups](#database-backups) below: the panel holds the entire ban history and audit
+trail, and there is no export-everything button.
+
+## Database backups
+
+Coolify's built-in scheduled backups attach to **database resources** — the ones created from the
+Databases section of the resource picker. Postgres here is a service inside a Docker Compose
+resource, so that tab may not appear for it. Check the `db` service first; if Coolify offers
+backups natively, use them and ignore the rest of this section.
+
+Otherwise, use a **Scheduled Task** on the resource. The compose file mounts `warcon-backups` at
+`/backups` in the `db` container for exactly this.
+
+| Field     | Value                      |
+| --------- | -------------------------- |
+| Container | `db`                       |
+| Frequency | `0 4 * * *` (daily, 04:00) |
+
+Command:
+
+```sh
+sh -c 'pg_dump -U warcon -Fc warcon -f /backups/warcon-$(date +%F-%H%M).dump && find /backups -name "warcon-*.dump" -mtime +14 -delete'
+```
+
+`-Fc` is Postgres's compressed custom format, restored with `pg_restore`. The `find` keeps two
+weeks and drops the rest, so the volume does not grow without limit.
+
+### Restoring
+
+From a terminal on the `db` container:
+
+```sh
+pg_restore -U warcon -d warcon --clean --if-exists /backups/warcon-2026-10-05-0400.dump
+```
+
+Stop the `warcon` container first so nothing writes during the restore.
+
+### This is a restore point, not disaster recovery
+
+`warcon-backups` lives on the same host as `warcon-db`. It survives a redeploy, a restart, a bad
+migration and an accidental delete — which covers the realistic failures — but **not** loss of the
+host itself, and deleting the Coolify resource takes both volumes with it.
+
+For off-host copies, either use Coolify's S3 backup destination if your version offers it for this
+resource, or download a dump periodically from the container's file browser. Worth doing before
+any sync that carries migrations.
 
 ## Building needs memory
 
