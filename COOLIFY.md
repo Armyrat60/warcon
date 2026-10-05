@@ -117,13 +117,46 @@ weeks and drops the rest, so the volume does not grow without limit.
 
 ### Restoring
 
-From a terminal on the `db` container:
+The database runs **TimescaleDB**, which cannot be restored with a plain `pg_restore` — the
+extension needs its own hooks either side, or the restore fails or leaves hypertables broken.
+`pg_dump` warns about this during every backup (the `continuous_agg` circular-FK notice); the dump
+itself is fine, it is the restore that needs the extra steps.
+
+Stop the `warcon` container first so nothing writes during the restore, then from a terminal on
+the `db` container:
 
 ```sh
-pg_restore -U warcon -d warcon --clean --if-exists /backups/warcon-2026-10-05-0400.dump
+DUMP=/backups/warcon-2026-10-05-2301.dump   # the file you are restoring
+
+psql -U warcon -d postgres -c 'DROP DATABASE IF EXISTS warcon_restore;'
+psql -U warcon -d postgres -c 'CREATE DATABASE warcon_restore;'
+psql -U warcon -d warcon_restore -c 'CREATE EXTENSION IF NOT EXISTS timescaledb;'
+psql -U warcon -d warcon_restore -c 'SELECT timescaledb_pre_restore();'
+pg_restore -U warcon -d warcon_restore --no-owner "$DUMP"
+psql -U warcon -d warcon_restore -c 'SELECT timescaledb_post_restore();'
 ```
 
-Stop the `warcon` container first so nothing writes during the restore.
+Restoring into `warcon_restore` rather than over `warcon` means a failed restore costs nothing and
+the original is still there to compare against. Once it looks right, swap them:
+
+```sh
+psql -U warcon -d postgres -c 'ALTER DATABASE warcon RENAME TO warcon_old;'
+psql -U warcon -d postgres -c 'ALTER DATABASE warcon_restore RENAME TO warcon;'
+```
+
+Start `warcon` again and check the panel. Drop `warcon_old` only once you are satisfied.
+
+### Test the restore before you need it
+
+A backup nobody has restored is a guess. Run the steps above into `warcon_restore` once, confirm
+the row counts look sane, then drop it:
+
+```sh
+psql -U warcon -d warcon_restore -c 'SELECT count(*) FROM audit_log;'
+psql -U warcon -d postgres -c 'DROP DATABASE warcon_restore;'
+```
+
+That exercises the whole path without touching the live database.
 
 ### This is a restore point, not disaster recovery
 
