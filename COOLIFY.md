@@ -49,6 +49,16 @@ Two buttons, both in a browser:
 
 Leave days or weeks between them if you want. Upstream's pace never touches the server.
 
+### Knowing when to look
+
+`.github/workflows/upstream-watch.yml` checks upstream every Monday and opens (or updates) one
+issue when this fork is behind, flagging whether `.env.example`, `Dockerfile`, `docker-compose.yml`
+or `drizzle/` changed. It never deploys and never syncs — it only tells you.
+
+Close the issue once you have synced; it comes back on the next check if the fork is still behind.
+Run it on demand from the Actions tab (**Upstream watch** → Run workflow). GitHub pauses scheduled
+workflows in a repository with no activity for 60 days, so if it goes quiet, run it by hand once.
+
 Before syncing, it is worth glancing at what changed — GitHub's compare view shows it without a
 terminal. Four paths actually matter:
 

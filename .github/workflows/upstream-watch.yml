@@ -1,0 +1,92 @@
+# Tells us when upstream has moved. Never deploys anything: Coolify only moves when we press
+# Redeploy, and this fork only moves when we press Sync fork. See COOLIFY.md.
+name: Upstream watch
+
+on:
+  schedule:
+    - cron: '0 9 * * 1' # Mondays, 09:00 UTC
+  workflow_dispatch: # run it by hand from the Actions tab
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  UPSTREAM: warcon-app/warcon
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Compare with upstream and report
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          MINE="$GITHUB_REPOSITORY"
+          UP="$UPSTREAM"
+          UP_OWNER="${UP%%/*}"
+          UP_NAME="${UP##*/}"
+
+          BEHIND=$(gh api "repos/$MINE/compare/main...$UP_OWNER:$UP_NAME:main" --jq '.ahead_by')
+          echo "behind by $BEHIND"
+          if [ "$BEHIND" -eq 0 ]; then
+            echo "Up to date; nothing to report."
+            exit 0
+          fi
+
+          # Compare the four paths that can break a deploy, by content hash rather than by
+          # scanning the diff: the compare API caps its file list at 300, and we are past that.
+          blob() { gh api "repos/$1/contents/$2?ref=main" --jq '.sha' 2>/dev/null || echo absent; }
+          sqlcount() {
+            gh api "repos/$1/contents/drizzle?ref=main" \
+              --jq '[.[] | select(.name | endswith(".sql"))] | length' 2>/dev/null || echo 0
+          }
+
+          FLAGS=""
+          for f in .env.example Dockerfile docker-compose.yml; do
+            if [ "$(blob "$MINE" "$f")" != "$(blob "$UP" "$f")" ]; then
+              FLAGS="$FLAGS
+          - \`$f\` **changed**"
+            fi
+          done
+
+          MINE_SQL=$(sqlcount "$MINE"); UP_SQL=$(sqlcount "$UP")
+          NEW_SQL=$(( UP_SQL - MINE_SQL ))
+          if [ "$NEW_SQL" -gt 0 ]; then
+            FLAGS="$FLAGS
+          - \`drizzle/\` **$NEW_SQL new migration(s)** — one-way. Back the database up before deploying."
+          fi
+          [ -n "$FLAGS" ] || FLAGS="
+          - none of the four — a routine sync"
+
+          TITLE="Upstream is $BEHIND commits ahead"
+          BODY=$(cat <<EOF
+          [\`$UP\`](https://github.com/$UP) is **$BEHIND commits** ahead of this fork.
+
+          **Worth a look before syncing:**$FLAGS
+
+          [See the full diff](https://github.com/$MINE/compare/main...$UP_OWNER:$UP_NAME:main)
+
+          ---
+
+          To take it: **Sync fork** on the repo page, then **Redeploy** in Coolify. Syncing alone
+          deploys nothing. Close this issue once done — it reopens on the next check if still behind.
+
+          _Raised automatically by \`.github/workflows/upstream-watch.yml\`._
+          EOF
+          )
+          # Strip the leading indentation the heredocs above carry.
+          BODY=$(printf '%s\n' "$BODY" | sed 's/^          //')
+
+          EXISTING=$(gh issue list --repo "$MINE" --state open --label upstream-watch \
+            --json number --jq '.[0].number // empty')
+
+          if [ -n "$EXISTING" ]; then
+            gh issue edit "$EXISTING" --repo "$MINE" --title "$TITLE" --body "$BODY"
+            echo "Updated issue #$EXISTING"
+          else
+            gh label create upstream-watch --repo "$MINE" --color ededed \
+              --description "Raised by the upstream watch workflow" 2>/dev/null || true
+            gh issue create --repo "$MINE" --title "$TITLE" --body "$BODY" --label upstream-watch
+          fi
